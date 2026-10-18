@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: webstreamr
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /manifest.json
+    autoDeployTrigger: commit
+    envVars:
+      - key: TMDB_ACCESS_TOKEN
+        sync: false
