@@ -338,6 +338,71 @@ describe('HDHub4u internal methods', () => {
     expect(results.some(r => r.href.includes('s05'))).toBe(true);
   });
 
+  test('fetchPageUrlsFromSearch re-anchors absolute dead-host permalinks to the base URL', async () => {
+    const baseUrl = new URL('https://new8.hdhub4u.cl/');
+    const imdbId = new ImdbId('tt5950044', undefined, undefined);
+
+    jest.spyOn(fetcher, 'json').mockResolvedValue({
+      hits: [
+        { document: { imdb_id: 'tt5950044', permalink: 'https://new2.hdhub4u.free/superman-2025?x=1', post_title: 'Superman 2025' } },
+      ],
+    });
+
+    const results = await source['fetchPageUrlsFromSearch'](ctx, imdbId, baseUrl);
+    expect(results).toHaveLength(1);
+    expect(results[0]?.href).toBe('https://new8.hdhub4u.cl/superman-2025?x=1');
+  });
+
+  test('discoverFromDomainsJson caches the resolved domain', async () => {
+    const json = jest.spyOn(fetcher, 'json').mockResolvedValue({ HDHUB4u: 'https://new8.hdhub4u.cl' });
+
+    const first = await source['discoverFromDomainsJson'](ctx);
+    const second = await source['discoverFromDomainsJson'](ctx);
+
+    expect(first).toBe('https://new8.hdhub4u.cl');
+    expect(second).toBe(first);
+    expect(json).toHaveBeenCalledTimes(1);
+  });
+
+  test('discoverFromDomainsJson ignores non-string entries', async () => {
+    jest.spyOn(fetcher, 'json').mockResolvedValue({ HDHUB4u: { url: 'https://new8.hdhub4u.cl' } });
+
+    expect(await source['discoverFromDomainsJson'](ctx)).toBeNull();
+  });
+
+  test('discoverFromDomainsJson returns null when the list is unreachable', async () => {
+    jest.spyOn(fetcher, 'json').mockRejectedValue(new Error('network error'));
+
+    expect(await source['discoverFromDomainsJson'](ctx)).toBeNull();
+  });
+
+  test('getBaseUrl prefers the phisher98 domain', async () => {
+    jest.spyOn(fetcher, 'json').mockImplementation(async (_ctx: unknown, url: URL) => {
+      if (url.href.includes('phisher98')) return { HDHUB4u: 'https://fresh.example' };
+      return {};
+    });
+    jest.spyOn(fetcher, 'head').mockResolvedValue({});
+
+    const result = await source['getBaseUrl'](ctx);
+
+    expect(result.origin).toBe('https://fresh.example');
+  });
+
+  test('getBaseUrl falls back to static candidates when the phisher98 domain is dead', async () => {
+    jest.spyOn(fetcher, 'json').mockImplementation(async (_ctx: unknown, url: URL) => {
+      if (url.href.includes('phisher98')) return { HDHUB4u: 'https://dead.example' };
+      return {};
+    });
+    jest.spyOn(fetcher, 'head').mockImplementation(async (_ctx: unknown, url: URL) => {
+      if (url.hostname === 'dead.example') throw new Error('unreachable');
+      return {};
+    });
+
+    const result = await source['getBaseUrl'](ctx);
+
+    expect(result.origin).not.toBe('https://dead.example');
+  });
+
   test('fetchPageUrlsFromSiteSearch finds matching links', async () => {
     const baseUrl = new URL('https://new6.hdhub4u.fo/');
     const imdbId = new ImdbId('tt5950044', undefined, undefined);

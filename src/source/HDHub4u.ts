@@ -24,9 +24,15 @@ interface SearchResponsePartial {
 const CDN_HOST_URL = 'https://cdn.hdhub4u.glass/host/';
 const CDN_HOST_TTL = 4 * 60 * 60 * 1000;
 
+const DOMAINS_JSON_URL = 'https://raw.githubusercontent.com/phisher98/TVVVV/refs/heads/main/domains.json';
+const DOMAINS_JSON_KEY = 'HDHUB4u';
+const DOMAINS_JSON_TTL = 4 * 60 * 60 * 1000;
+
 let cdnDiscoveredUrl: string | null = null;
 let cdnDiscoveryTs = 0;
 let cdnVerifiedAliveAt = 0;
+let domainsJsonUrl: string | null = null;
+let domainsJsonTs = 0;
 export const CDN_VERIFY_INTERVAL = 5 * 60 * 1000;
 
 export function resetCdnCache(): string | undefined {
@@ -39,6 +45,8 @@ export function resetCdnCache(): string | undefined {
   cdnDiscoveredUrl = null;
   cdnDiscoveryTs = 0;
   cdnVerifiedAliveAt = 0;
+  domainsJsonUrl = null;
+  domainsJsonTs = 0;
   return evictedHost;
 }
 
@@ -78,11 +86,12 @@ export class HDHub4u extends Source {
 
   public readonly countryCodes: CountryCode[] = [CountryCode.multi, CountryCode.gu, CountryCode.hi, CountryCode.ml, CountryCode.pa, CountryCode.ta, CountryCode.te];
 
-  public readonly baseUrl = 'https://new1.hdhub4u.limo';
+  public readonly baseUrl = 'https://new8.hdhub4u.cl';
 
   protected override readonly domainKey = 'hdhub';
 
   private readonly FALLBACK_CANDIDATES = [
+    'https://new8.hdhub4u.cl',
     'https://new1.hdhub4u.limo',
     'https://new1.hdhub4u.fo',
     'https://new2.hdhub4u.fo',
@@ -96,7 +105,7 @@ export class HDHub4u extends Source {
     'https://new10.hdhub4u.fo',
   ];
 
-  private readonly searchUrl = 'https://search.hdhub4u.glass';
+  private readonly searchUrl = 'https://search.pingora.fyi';
 
   private readonly fetcher: Fetcher;
 
@@ -251,7 +260,16 @@ export class HDHub4u extends Source {
 
   private readonly fetchPageUrlsFromSearch = async (ctx: Context, imdbId: ImdbId, baseUrl: URL): Promise<URL[]> => {
     try {
-      const searchUrl = new URL(`/collections/post/documents/search?query_by=imdb_id&q=${encodeURIComponent(imdbId.id)}`, this.searchUrl);
+      const searchUrl = new URL('/collections/post/documents/search', this.searchUrl);
+      searchUrl.searchParams.set('q', imdbId.id);
+      searchUrl.searchParams.set('query_by', 'post_title,category,stars,director,imdb_id');
+      searchUrl.searchParams.set('query_by_weights', '4,2,2,2,4');
+      searchUrl.searchParams.set('sort_by', 'sort_by_date:desc');
+      searchUrl.searchParams.set('limit', '15');
+      searchUrl.searchParams.set('highlight_fields', 'none');
+      searchUrl.searchParams.set('use_cache', 'true');
+      searchUrl.searchParams.set('page', '1');
+
       const searchResponse = await this.fetcher.json(ctx, searchUrl, { headers: { Referer: baseUrl.href } }) as SearchResponsePartial;
 
       return searchResponse.hits
@@ -264,10 +282,21 @@ export class HDHub4u extends Source {
             || hit.document.post_title.includes(`S${String(imdbId.season).padStart(2, '0')}`)
           ),
         )
-        .map(hit => new URL(hit.document.permalink, baseUrl));
+        .map(hit => this.toBaseUrl(hit.document.permalink, baseUrl));
     } catch {
       return [];
     }
+  };
+
+  /**
+   * Search results carry absolute permalinks on rotating hosts (often a dead
+   * `*.hdhub4u.free` domain). Keep only the path and query, then re-anchor it
+   * to the base URL that was probed alive.
+   */
+  private readonly toBaseUrl = (permalink: string, baseUrl: URL): URL => {
+    const resolved = new URL(permalink, baseUrl);
+
+    return new URL(`${resolved.pathname}${resolved.search}`, baseUrl);
   };
 
   private readonly fetchPageUrlsFromSiteSearch = async (ctx: Context, imdbId: ImdbId, baseUrl: URL): Promise<URL[]> => {
@@ -299,7 +328,7 @@ export class HDHub4u extends Source {
       const d = new Date();
       const seed = (d.getFullYear() * 1000000) + ((d.getMonth() + 1) * 10000) + (d.getDate() * 100) + d.getHours() + 1;
       const url = new URL(`?v=${seed}`, CDN_HOST_URL);
-      const response = await this.fetcher.json(ctx, url) as CdnHostResponse;
+      const response = await this.fetcher.json(ctx, url, { timeout: 5000 }) as CdnHostResponse;
 
       if (response.c) {
         const decoded = atob(response.c.replace(/\/$/, ''));
@@ -312,6 +341,30 @@ export class HDHub4u extends Source {
 
     return null;
   }
+
+  /**
+   * Secondary domain source. The shared provider list is stale for HDhub4u,
+   * while phisher98's list is updated with the rotating `HDHUB4u` host.
+   */
+  private readonly discoverFromDomainsJson = async (ctx: Context): Promise<string | null> => {
+    if (domainsJsonUrl && Date.now() - domainsJsonTs < DOMAINS_JSON_TTL) {
+      return domainsJsonUrl;
+    }
+
+    try {
+      const response = await this.fetcher.json(ctx, new URL(DOMAINS_JSON_URL)) as Record<string, unknown>;
+      const entry = response[DOMAINS_JSON_KEY];
+      const url = typeof entry === 'string' ? entry : null;
+
+      if (url) {
+        domainsJsonUrl = url;
+        domainsJsonTs = Date.now();
+        return url;
+      }
+    } catch { /* domains list unreachable */ }
+
+    return null;
+  };
 
   private readonly getBaseUrl = async (ctx: Context) => {
     const cdnUrl = await this.discoverFromCdn(ctx);
@@ -344,6 +397,13 @@ export class HDHub4u extends Source {
           // invalid CDN URL, fall through to probeBaseUrl
         }
       }
+    }
+
+    const discoveredDomain = await this.discoverFromDomainsJson(ctx);
+    if (discoveredDomain) {
+      try {
+        return await this.probeBaseUrl(ctx, this.fetcher, this.domainKey, [discoveredDomain]);
+      } catch { /* stale domains entry, fall through to static candidates */ }
     }
 
     return this.probeBaseUrl(ctx, this.fetcher, this.domainKey, this.FALLBACK_CANDIDATES);

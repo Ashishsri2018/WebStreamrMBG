@@ -102,7 +102,7 @@ export class FetcherMock extends Fetcher {
       let response;
       try {
         if (envGet('TEST_UPDATE_FIXTURES')) {
-          response = await super.fetchWithTimeout(ctx, url, requestConfig);
+          response = await super.fetch(ctx, url, requestConfig);
         } else {
           throw new Error(`No fixture found at "${path}".`);
         }

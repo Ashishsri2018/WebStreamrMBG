@@ -26,6 +26,22 @@ For a better experience, I'd advise using a Debrid service and WebStreamrMBG as 
 - FlareSolverr cookies cannot be used because Cloudflare does techniques like TLS fingerprinting most likely. But FlareSolverr uses a session per host and should be quick.
 - RgShows detects shared usage and blocks IPs. It therefore only works on private instances.
 
+## Source notes
+
+### HDHub4u
+
+HDHub4u rotates its domains frequently. WebStreamrMBG resolves the current host
+at runtime, so no manual configuration is needed:
+
+- search goes through the site's `search.pingora.fyi` backend;
+- the current domain is read from
+  [phisher98/TVVVV](https://github.com/phisher98/TVVVV) `domains.json` (cached for
+  4 hours), with built-in fallback domains;
+- absolute search permalinks on dead hosts are re-anchored to the resolved
+  domain before pages are fetched.
+
+If this source returns no streams, update to the latest release.
+
 ## MediaFlow Proxy
 
 [MediaFlow Proxy](https://github.com/mhdzumair/mediaflow-proxy/) can be added when configuring the add-on to gain access to a couple of more file hosters.
